@@ -21,7 +21,8 @@ import sqlite3
 import hashlib
 from io import BytesIO
 from docx import Document
-from docx.shared import Pt
+from docx.shared import Pt, Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from google import genai
@@ -43,7 +44,7 @@ st.set_page_config(
 # БАЗА ДАННЫХ ДЛЯ КТП (КАЛЕНДАРНО-ТЕМАТИЧЕСКОЕ ПЛАНИРОВАНИЕ)
 # ==========================================
 KTP_DATA = {
-    "Grade 10 (Action for Kazakhstan)": {
+    "Grade 10": {
         "Science & Scientific Phenomena": {
             "topic": "Virtual Reality and its Applications",
             "objectives": "10.4.2.1 - Understand specific information and detail in extended texts on a range of familiar general and curricular topics;\n10.5.2.1 - Use a growing range of vocabulary, which is appropriate to topic and context, and clear symbols."
@@ -57,7 +58,7 @@ KTP_DATA = {
             "objectives": "10.1.6.1 - Organize and activate talk with peers to solve problems collaboratively;\n10.3.7.1 - Use appropriate subject-specific vocabulary and syntax to talk about a range of general and curricular topics."
         }
     },
-    "Grade 11 (Aspect for Kazakhstan)": {
+    "Grade 11": {
         "Making Living Space Better": {
             "topic": "Smart Home Technologies and Architecture",
             "objectives": "11.4.3.1 - Skim and scan a range of fiction and non-fiction texts for give message;\n11.5.1.1 - Plan, write, edit and proofread work at text level with minimal support."
@@ -69,7 +70,6 @@ KTP_DATA = {
     }
 }
 
-# БАЗА ДАННЫХ ПОЛЬЗОВАТЕЛЕЙ И АРХИВА MDS
 DB_FILE = "mds_marabaev_7.db"
 
 def init_db():
@@ -78,7 +78,7 @@ def init_db():
     c.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT)")
     c.execute("""CREATE TABLE IF NOT EXISTS plans (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, type TEXT,
-                    school TEXT, teacher TEXT, grade TEXT, topic TEXT, objs TEXT, 
+                    school TEXT, teacher TEXT, grade TEXT, unit TEXT, topic TEXT, objs TEXT, 
                     lang TEXT, content TEXT)""")
     conn.commit()
     conn.close()
@@ -104,7 +104,7 @@ def ask_ai_or_template(mode, data, lang):
         try:
             client = genai.Client(api_key=БЕЗОПАСНЫЙ_API_КЛЮЧ)
             if mode == "KSP":
-                prompt = f"Create KSP lesson plan Order 130. Language: {lang}. Topic: {data['topic']}. Grade: {data['grade']}. Objectives: {data['objs']}. Tasks: {data['tasks']}. Generate clean JSON only with keys: open_teacher, open_student, open_assess, mid_teacher, mid_student, mid_assess, end_teacher, end_student, end_assess, ref_teacher, ref_student, ref_assess, criteria_table."
+                prompt = f"Create KSP lesson plan Order 130. Language: {lang}. Topic: {data['topic']}. Grade: {data['grade']}. Objectives: {data['objs']}. Tasks: {data['tasks']}. Generate clean JSON only with keys: open_teacher, open_student, open_assess, mid_teacher, mid_student, mid_assess, end_teacher, end_student, end_assess, ref_teacher, ref_student, ref_assess, lesson_goal, value_integration."
             else:
                 prompt = f"Create SOR assessment task based on Kazakhstan curriculum. Language: {lang}. Grade: {data['grade']}. Topic: {data['topic']}. Objectives: {data['objs']}. Generate clean JSON only with keys: task_description, questions, descriptors, max_points."
                 
@@ -118,6 +118,8 @@ def ask_ai_or_template(mode, data, lang):
 
     if mode == "KSP":
         return {
+            "lesson_goal": "To analyze and implement new subject-specific terminology in practical communication tasks.",
+            "value_integration": "Academic honesty, collaborative lifelong learning, and digital awareness.",
             "open_teacher": "Greeting. Action: Teacher introduces the lesson topic and presents learning objectives. Warming-up activity: Brainstorming ideas.",
             "open_student": "Students respond to greeting, write down the topic, and share their initial thoughts during brainstorming.",
             "open_assess": "Formative tracking: Learners are awarded for active verbal responses. (No formal marks)",
@@ -129,8 +131,7 @@ def ask_ai_or_template(mode, data, lang):
             "end_assess": "Feedback technique: 'Two stars and a wish' protocol implemented. (3 points)",
             "ref_teacher": "Teacher distributes self-assessment worksheets to evaluate individual comfort levels.",
             "ref_student": "Students fill out the reflection maps, identifying fields of success and doubt.",
-            "ref_assess": "Self-assessment sheet saved in portfolio.",
-            "criteria_table": "• Applies thematic vocabulary correctly (5 points)\n• Expresses arguments with valid text evidence (5 points)"
+            "ref_assess": "Self-assessment sheet saved in portfolio."
         }
     else:
         return {
@@ -141,32 +142,78 @@ def ask_ai_or_template(mode, data, lang):
         }
 
 # ==========================================
-# ОФОРМЛЕНИЕ ДОКУМЕНТОВ WORD (СТИЛЬ MDS)
+# ОФОРМЛЕНИЕ ДОКУМЕНТОВ WORD ПО СКРИНШОТУ (ИСПРАВЛЕНО)
 # ==========================================
-def set_cell_margins(cell, top=140, bottom=140, left=150, right=150):
-    tc = cell._tcPr or cell._tc.get_or_add_tcPr()
+def set_cell_margins(cell, top=100, bottom=100, left=150, right=150):
+    tcPr = cell._tc.get_or_add_tcPr()
     tcMar = OxmlElement('w:tcMar')
     for m, val in [('top', top), ('bottom', bottom), ('left', left), ('right', right)]:
-        node = OxmlElement(f'w:{m}'); node.set(qn('w:w'), str(val)); node.set(qn('w:type'), 'dxa'); tcMar.append(node)
+        node = OxmlElement(f'w:{m}')
+        node.set(qn('w:w'), str(val))
+        node.set(qn('w:type'), 'dxa')
+        tcMar.append(node)
     tcPr.append(tcMar)
 
 def create_ksp_docx(data):
     doc = Document()
-    p = doc.add_paragraph()
-    r = p.add_run(f"APPROVED BY _____________\n{data['school']}\nShort-term Lesson Plan: Английский язык")
-    r.font.name = 'Arial'; r.font.size = Pt(11); r.bold = True
     
-    t1 = doc.add_table(rows=0, cols=2); t1.style = 'Table Grid'
-    rows = [("Teacher’s name:", data['teacher']), ("Class / Grade:", data['grade']), ("Lesson Topic:", data['topic']), ("Learning Objectives:", data['objs'])]
-    for k, v in rows:
-        row = t1.add_row(); row.cells[0].text = k; row.cells[1].text = v
+    # 1. Правый верхний угол: CHECKED
+    p_check = doc.add_paragraph()
+    p_check.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    r_check = p_check.add_run("CHECKED _____________\nКГУ Школа-лицей №7 им. Н. Марабаева")
+    r_check.font.name = 'Arial'
+    r_check.font.size = Pt(11)
+    
+    # 2. Центр: Заголовок Short-term plan
+    p_title = doc.add_paragraph()
+    p_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r_title = p_title.add_run(f"Short-term plan for Английский язык in {data['grade']}")
+    r_title.font.name = 'Arial'
+    r_title.font.size = Pt(12)
+    
+    # 3. Таблица заголовка (8 строк строго по скриншоту)
+    t1 = doc.add_table(rows=0, cols=2)
+    t1.style = 'Table Grid'
+    
+    header_rows = [
+        ("Unit", data['unit']),
+        ("Teacher’s name", data['teacher']),
+        ("Date", data['date']),
+        ("Class", data['grade']),
+        ("Lesson topic", data['topic']),
+        ("Learning objectives covered in this lesson\n(curriculum reference)", data['objs']),
+        ("Lesson goal", data['lesson_goal']),
+        ("Value for integration", data['value_integration'])
+    ]
+    
+    for label, val in header_rows:
+        row = t1.add_row()
+        row.cells[0].text = label
+        row.cells[1].text = val
+        row.cells[0].paragraphs[0].runs[0].font.name = 'Arial'
         row.cells[0].paragraphs[0].runs[0].font.bold = True
-        set_cell_margins(row.cells[0]); set_cell_margins(row.cells[1])
+        if row.cells[1].paragraphs[0].runs:
+            row.cells[1].paragraphs[0].runs[0].font.name = 'Arial'
+        set_cell_margins(row.cells[0])
+        set_cell_margins(row.cells[1])
         
-    doc.add_paragraph().add_run("\nLesson Flow & Stages\n").bold = True
-    t2 = doc.add_table(rows=1, cols=4); t2.style = 'Table Grid'
+    for row in t1.rows:
+        row.cells[0].width = Inches(2.5)
+        row.cells[1].width = Inches(4.5)
+
+    # 4. Секция ходов урока
+    p_flow = doc.add_paragraph()
+    p_flow.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r_flow = p_flow.add_run("\nLesson flow\n")
+    r_flow.font.name = 'Arial'
+    r_flow.bold = True
+    
+    t2 = doc.add_table(rows=1, cols=4)
+    t2.style = 'Table Grid'
     for i, h in enumerate(["Stage / Time", "Teacher Actions", "Student Actions", "Assessment"]):
-        t2.rows[0].cells[i].text = h; t2.rows[0].cells[i].paragraphs[0].runs[0].font.bold = True
+        t2.rows[0].cells[i].text = h
+        t2.rows[0].cells[i].paragraphs[0].runs[0].font.name = 'Arial'
+        t2.rows[0].cells[i].paragraphs[0].runs[0].font.bold = True
         set_cell_margins(t2.rows[0].cells[i])
         
     stages = [
@@ -177,7 +224,11 @@ def create_ksp_docx(data):
     ]
     for stg, t, s, a in stages:
         row = t2.add_row()
-        for idx, text in enumerate([stg, t, s, a]): row.cells[idx].text = text; set_cell_margins(row.cells[idx])
+        for idx, text in enumerate([stg, t, s, a]): 
+            row.cells[idx].text = text
+            if row.cells[idx].paragraphs[0].runs:
+                row.cells[idx].paragraphs[0].runs[0].font.name = 'Arial'
+            set_cell_margins(row.cells[idx])
         
     bio = BytesIO(); doc.save(bio); return bio.getvalue()
 
@@ -222,7 +273,6 @@ if not st.session_state.logged_in:
     with col2:
         st.info("💡 Добро пожаловать в единую систему генерации КСП и СОР/СОЧ Marabaev's Digital School. Авторизуйтесь на боковой панели.")
 else:
-    # РАБОЧИЕ СЕКЦИИ
     tab_ksp, tab_sor, tab_archive = st.tabs(["📋 Конструктор КСП (Приказ №130)", "🎯 Модуль СОР / СОЧ", "🗂 Внутришкольный Архив MDS"])
     
     # ----------------------------------------
@@ -247,6 +297,7 @@ else:
         with col_p1:
             school = st.text_input("Организация образования (Школа):", value="КГУ Школа-лицей №7 им. Н.А. Марабаева")
             teacher = st.text_input("ФИО преподавателя:", value=st.session_state.username)
+            date_val = st.text_input("Дата проведения урока:", value="17.06.2026")
             lang = st.selectbox("Язык документов:", ["English", "Русский", "Қазақша"], key="ksp_lang")
         with col_p2:
             tasks = st.text_area("📖 Упражнения из учебника:", value="Student's Book: Exercise 3, page 44. Analysis of infographic data.")
@@ -258,10 +309,11 @@ else:
                 res = ask_ai_or_template("KSP", inp, lang)
                 
             conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-            c.execute("INSERT INTO plans (user_id, type, school, teacher, grade, topic, objs, lang, content) VALUES (?, 'KSP', ?, ?, ?, ?, ?, ?, ?)",
-                      (st.session_state.user_id, school, teacher, sel_grade, auto_topic, auto_objs, lang, json.dumps(res, ensure_ascii=False)))
+            c.execute("""INSERT INTO plans (user_id, type, school, teacher, grade, unit, topic, objs, lang, content) 
+                         VALUES (?, 'KSP', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                      (st.session_state.user_id, school, teacher, sel_grade, sel_unit, auto_topic, auto_objs, lang, json.dumps(res, ensure_ascii=False)))
             conn.commit(); conn.close()
-            st.success("🎉 План успешно отправлен во внутришкольный архив MDS!")
+            st.success("🎉 План успешно сохранен! Скачайте его во вкладке 'Внутришкольный Архив MDS'.")
 
     # ----------------------------------------
     # ВКЛАДКА 2: СОР
@@ -286,8 +338,9 @@ else:
                 res = ask_ai_or_template("SOR", inp, s_lang)
                 
             conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-            c.execute("INSERT INTO plans (user_id, type, school, teacher, grade, topic, objs, lang, content) VALUES (?, 'SOR', ?, ?, ?, ?, ?, ?, ?)",
-                      (st.session_state.user_id, s_school, st.session_state.username, s_grade, s_topic, s_objs, s_lang, json.dumps(res, ensure_ascii=False)))
+            c.execute("""INSERT INTO plans (user_id, type, school, teacher, grade, unit, topic, objs, lang, content) 
+                         VALUES (?, 'SOR', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                      (st.session_state.user_id, s_school, st.session_state.username, s_grade, s_unit, s_topic, s_objs, s_lang, json.dumps(res, ensure_ascii=False)))
             conn.commit(); conn.close()
             st.success("🎯 Задания СОР успешно добавлены в ваш архив MDS!")
 
@@ -298,19 +351,20 @@ else:
         st.markdown("<h3 style='color: #1E3A8A;'>Цифровой архив документов MDS</h3>", unsafe_allow_html=True)
         
         conn = sqlite3.connect(DB_FILE); c = conn.cursor()
-        c.execute("SELECT id, type, grade, topic, lang, content, school, teacher, objs FROM plans WHERE user_id = ?", (st.session_state.user_id,))
+        c.execute("SELECT id, type, grade, unit, topic, lang, content, school, teacher, objs FROM plans WHERE user_id = ?", (st.session_state.user_id,))
         records = c.fetchall(); conn.close()
         
         if not records:
             st.info("Архив MDS пока пуст. Сгенерируйте первый КСП или СОР.")
         else:
-            for r_id, r_type, r_grade, r_topic, r_lang, r_json, r_school, r_teacher, r_objs in records:
+            for r_id, r_type, r_grade, r_unit, r_topic, r_lang, r_json, r_school, r_teacher, r_objs in records:
                 doc_data = json.loads(r_json)
                 type_label = "📋 КСП" if r_type == "KSP" else "🎯 СОР"
                 
                 with st.expander(f"{type_label} — {r_grade} — {r_topic} [{r_lang}]"):
                     if r_type == "KSP":
                         st.write(f"**Организация:** {r_school} | **Учитель:** {r_teacher}")
+                        
                         st.table({
                             "Этап урока / Время": ["Открытие (5 мин)", "Основной (25 min)", "Закрепление (10 min)", "Рефлексия (5 min)"],
                             "Действия учителя": [doc_data.get('open_teacher',''), doc_data.get('mid_teacher',''), doc_data.get('end_teacher',''), doc_data.get('ref_teacher','')],
@@ -319,7 +373,10 @@ else:
                         })
                         
                         w_data = {
-                            'school': r_school, 'teacher': r_teacher, 'grade': r_grade, 'topic': r_topic, 'objs': r_objs,
+                            'school': r_school, 'teacher': r_teacher, 'grade': r_grade, 'unit': r_unit if r_unit else "Unit example",
+                            'date': "17.06.2026", 'topic': r_topic, 'objs': r_objs,
+                            'lesson_goal': doc_data.get('lesson_goal', 'To develop active vocabulary skills.'),
+                            'value_integration': doc_data.get('value_integration', 'Lifelong learning.'),
                             'o_t': doc_data.get('open_teacher',''), 'o_s': doc_data.get('open_student',''), 'o_a': doc_data.get('open_assess',''),
                             'm_t': doc_data.get('mid_teacher',''), 'm_s': doc_data.get('mid_student',''), 'm_a': doc_data.get('mid_assess',''),
                             'e_t': doc_data.get('end_teacher',''), 'e_s': doc_data.get('end_student',''), 'e_a': doc_data.get('end_assess',''),
