@@ -1,0 +1,4 @@
+streamlit
+pycryptodome
+python-docx
+google-genai
