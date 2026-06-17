@@ -70,7 +70,7 @@ KTP_DATA = {
     }
 }
 
-DB_FILE = "mds_marabaev_7.db"
+DB_FILE = "mds_marabaev_7_v2.db"
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
